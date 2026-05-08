@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "tactical-genius"
+version = "0.1.0"
+description = "AI soccer tactical co-manager powered by Google Gemini and LangGraph"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain>=0.3",
+    "langchain-google-genai>=2.0",
+    "langgraph>=0.3",
+    "requests>=2.32",
+    "python-dotenv>=1.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "rich>=13.0",
+]
+
+[project.scripts]
+tactical-genius = "tactical_genius.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tactical_genius*"]
