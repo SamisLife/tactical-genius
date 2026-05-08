@@ -1,6 +1,7 @@
 """Data layer: wraps the football-data.org v4 API."""
 
 from .client import (
+    search_team,
     get_live_matches,
     get_match_details,
     get_team_recent_form,
@@ -10,6 +11,7 @@ from .client import (
 )
 
 __all__ = [
+    "search_team",
     "get_live_matches",
     "get_match_details",
     "get_team_recent_form",

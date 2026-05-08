@@ -42,6 +42,40 @@ def _get(path: str, params: dict | None = None, cache_ttl: int = _CACHE_TTL) -> 
     return data
 
 
+def search_team(name: str, limit: int = 5) -> dict:
+    """Search for a team by name. Returns best matches sorted by name similarity."""
+    raw = _get("/teams", params={"name": name}, cache_ttl=3600)
+    if "error" in raw:
+        return raw
+
+    query = name.lower().strip()
+
+    def score(t: dict) -> int:
+        n = (t.get("name") or "").lower()
+        sn = (t.get("shortName") or "").lower()
+        if n == query or sn == query:
+            return 3
+        if n.startswith(query) or sn.startswith(query):
+            return 2
+        return 1
+
+    teams = sorted(raw.get("teams", []), key=score, reverse=True)[:limit]
+    return {
+        "count": len(teams),
+        "teams": [
+            {
+                "id": t.get("id"),
+                "name": t.get("name"),
+                "short_name": t.get("shortName"),
+                "tla": t.get("tla"),
+                "area": t.get("area", {}).get("name"),
+                "competitions": [c.get("name") for c in t.get("runningCompetitions", [])],
+            }
+            for t in teams
+        ],
+    }
+
+
 def get_live_matches() -> dict:
     """All currently live matches."""
     raw = _get("/matches", params={"status": "LIVE"})
