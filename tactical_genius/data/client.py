@@ -262,7 +262,7 @@ def get_team_recent_form(team_id: int, last_n: int = 5) -> dict:
         "team_id": team_id,
         "team_name": team_name,
         "form_string": "".join(r["result"] for r in reversed(results)),
-        "matches": results,
+        "matches": list(reversed(results)),
         "summary": {
             "wins": wins,
             "draws": draws,
