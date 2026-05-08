@@ -15,6 +15,43 @@ _HEADERS = {"X-Auth-Token": os.getenv("FOOTBALL_DATA_API_KEY", "")}
 _cache: dict[str, tuple[float, Any]] = {}
 _CACHE_TTL = 60  # seconds
 
+# Quick lookup for clubs people actually ask about — avoids flaky API name search.
+# IDs from football-data.org. Add more as needed.
+_KNOWN_TEAMS: dict[str, int] = {
+    # Premier League
+    "arsenal": 57, "chelsea": 61, "liverpool": 64, "manchester city": 65,
+    "man city": 65, "manchester united": 66, "man united": 66, "man utd": 66,
+    "tottenham": 73, "spurs": 73, "newcastle": 67, "aston villa": 58,
+    "everton": 62, "west ham": 563, "brighton": 397, "fulham": 63,
+    "brentford": 402, "crystal palace": 354, "wolves": 76, "wolverhampton": 76,
+    "nottingham forest": 351, "bournemouth": 1044, "leicester": 338,
+    "southampton": 340, "ipswich": 57, "luton": 389,
+    # La Liga
+    "real madrid": 86, "barcelona": 81, "atletico madrid": 78, "atletico": 78,
+    "sevilla": 559, "real sociedad": 92, "villarreal": 94, "athletic bilbao": 77,
+    "athletic club": 77, "valencia": 95, "betis": 90, "real betis": 90,
+    "osasuna": 79, "getafe": 82, "celta vigo": 558, "mallorca": 89,
+    "girona": 298, "las palmas": 275, "alaves": 263, "cadiz": 264,
+    # Bundesliga
+    "bayern munich": 5, "bayern": 5, "borussia dortmund": 4, "dortmund": 4,
+    "bayer leverkusen": 3, "leverkusen": 3, "rb leipzig": 721, "leipzig": 721,
+    "eintracht frankfurt": 19, "frankfurt": 19, "wolfsburg": 11,
+    "borussia monchengladbach": 18, "gladbach": 18, "freiburg": 17,
+    "union berlin": 28, "werder bremen": 12, "bremen": 12,
+    # Serie A
+    "juventus": 109, "inter milan": 108, "inter": 108, "ac milan": 98, "milan": 98,
+    "napoli": 113, "roma": 100, "as roma": 100, "lazio": 110, "atalanta": 102,
+    "fiorentina": 107, "torino": 586, "bologna": 103, "udinese": 115,
+    # Ligue 1
+    "psg": 524, "paris saint-germain": 524, "paris": 524,
+    "marseille": 516, "lyon": 523, "monaco": 548, "lens": 521, "lille": 521,
+    "rennes": 529, "nice": 522, "strasbourg": 576, "nantes": 543,
+    # Champions League regulars not above
+    "porto": 503, "benfica": 498, "ajax": 674, "psv": 682,
+    "celtic": 732, "rangers": 733, "anderlecht": 643,
+    "sporting cp": 498, "brugge": 851, "club brugge": 851,
+}
+
 
 def _get(path: str, params: dict | None = None, cache_ttl: int = _CACHE_TTL) -> dict:
     cache_key = path + str(sorted((params or {}).items()))
@@ -43,12 +80,58 @@ def _get(path: str, params: dict | None = None, cache_ttl: int = _CACHE_TTL) -> 
 
 
 def search_team(name: str, limit: int = 5) -> dict:
-    """Search for a team by name. Returns best matches sorted by name similarity."""
+    """
+    Search for a team by name. Checks a local lookup table first (fast, reliable),
+    then falls back to the API for less common clubs.
+    """
+    query = name.lower().strip()
+
+    # local lookup — handles most clubs people will ask about
+    exact_id = _KNOWN_TEAMS.get(query)
+    if exact_id:
+        raw = _get(f"/teams/{exact_id}", cache_ttl=3600)
+        if "error" not in raw:
+            return {
+                "count": 1,
+                "teams": [{
+                    "id": raw.get("id"),
+                    "name": raw.get("name"),
+                    "short_name": raw.get("shortName"),
+                    "tla": raw.get("tla"),
+                    "area": raw.get("area", {}).get("name"),
+                    "competitions": [c.get("name") for c in raw.get("runningCompetitions", [])],
+                }],
+            }
+
+    # fuzzy match against the lookup table before hitting the API
+    fuzzy = [
+        (key, tid) for key, tid in _KNOWN_TEAMS.items()
+        if query in key or key in query
+    ]
+    if fuzzy:
+        results = []
+        seen = set()
+        for key, tid in fuzzy[:limit]:
+            if tid in seen:
+                continue
+            seen.add(tid)
+            r = _get(f"/teams/{tid}", cache_ttl=3600)
+            if "error" not in r:
+                results.append({
+                    "id": r.get("id"),
+                    "name": r.get("name"),
+                    "short_name": r.get("shortName"),
+                    "tla": r.get("tla"),
+                    "area": r.get("area", {}).get("name"),
+                    "competitions": [c.get("name") for c in r.get("runningCompetitions", [])],
+                })
+        if results:
+            return {"count": len(results), "teams": results}
+
+    # fall back to API search for unknown clubs
     raw = _get("/teams", params={"name": name}, cache_ttl=3600)
     if "error" in raw:
         return raw
-
-    query = name.lower().strip()
 
     def score(t: dict) -> int:
         n = (t.get("name") or "").lower()
