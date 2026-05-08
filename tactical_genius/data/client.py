@@ -60,13 +60,20 @@ def _get(path: str, params: dict | None = None, cache_ttl: int = _CACHE_TTL) -> 
         if time.time() - ts < cache_ttl:
             return data
 
-    try:
-        resp = requests.get(f"{_BASE}{path}", headers=_HEADERS, params=params or {}, timeout=10)
-    except requests.exceptions.RequestException as exc:
-        return {"error": f"Network error: {exc}"}
+    for attempt in range(4):  # 1 attempt + 3 retries
+        try:
+            resp = requests.get(f"{_BASE}{path}", headers=_HEADERS, params=params or {}, timeout=10)
+        except requests.exceptions.RequestException as exc:
+            return {"error": f"Network error: {exc}"}
 
-    if resp.status_code == 429:
-        return {"error": "Rate limit hit — wait a minute and retry."}
+        if resp.status_code != 429:
+            break
+
+        if attempt < 3:
+            time.sleep(2 ** attempt)  # 1s, 2s, 4s
+    else:
+        return {"error": "Rate limit hit after 3 retries — try again in a minute."}
+
     if resp.status_code == 403:
         return {"error": "Bad or missing FOOTBALL_DATA_API_KEY."}
     if resp.status_code == 404:
