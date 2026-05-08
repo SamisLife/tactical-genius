@@ -165,7 +165,7 @@ def fetch_player_history(player_id: int) -> str:
     from fetch_squad. Note: the free API tier returns match history but not detailed
     per-match stats like goals/assists.
     """
-    raw = _get(f"/persons/{player_id}/matches", params={"limit": 10}, cache_ttl=300)
+    raw = _get(f"/persons/{player_id}/matches", params={"limit": 10}, cache_ttl=3600)
     if "error" in raw:
         return f"Error: {raw['error']}"
 

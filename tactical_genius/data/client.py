@@ -223,7 +223,7 @@ def get_match_details(match_id: int) -> dict:
 def get_team_recent_form(team_id: int, last_n: int = 5) -> dict:
     """Last N finished matches for a team, with a form string like WWDLW."""
     # fetch double to account for cup games and gaps
-    raw = _get(f"/teams/{team_id}/matches", params={"status": "FINISHED", "limit": max(last_n * 2, 10)})
+    raw = _get(f"/teams/{team_id}/matches", params={"status": "FINISHED", "limit": max(last_n * 2, 10)}, cache_ttl=1800)
     if "error" in raw:
         return raw
 
@@ -321,8 +321,8 @@ def get_team_squad(team_id: int) -> dict:
 
 def get_head_to_head(team1_id: int, team2_id: int, limit: int = 10) -> dict:
     """Historical matchups between two teams, built by cross-referencing both teams' match histories."""
-    raw1 = _get(f"/teams/{team1_id}/matches", params={"status": "FINISHED", "limit": 50})
-    raw2 = _get(f"/teams/{team2_id}/matches", params={"status": "FINISHED", "limit": 50})
+    raw1 = _get(f"/teams/{team1_id}/matches", params={"status": "FINISHED", "limit": 50}, cache_ttl=3600)
+    raw2 = _get(f"/teams/{team2_id}/matches", params={"status": "FINISHED", "limit": 50}, cache_ttl=3600)
 
     if "error" in raw1:
         return raw1
@@ -400,7 +400,7 @@ def get_standings(competition_id: str | int) -> dict:
     Common IDs: PL (Premier League), CL (Champions League), BL1 (Bundesliga),
     SA (Serie A), PD (La Liga), FL1 (Ligue 1)
     """
-    raw = _get(f"/competitions/{competition_id}/standings", cache_ttl=300)
+    raw = _get(f"/competitions/{competition_id}/standings", cache_ttl=3600)
     if "error" in raw:
         return raw
 
