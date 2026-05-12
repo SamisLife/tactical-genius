@@ -254,26 +254,40 @@ def compare_players(player1_name: str, team1_id: int, player2_name: str, team2_i
 @tool
 def fetch_standings(competition_id: str) -> str:
     """
-    Get the current league table for a competition. Use this to understand the stakes —
-    title race, European spots, relegation battles — which should inform how aggressive
-    or defensive a team's tactics should be. Common IDs: PL, CL, BL1, SA, PD, FL1.
+    Get the current league table or group standings for a competition. Use this to understand
+    the stakes — title race, European spots, relegation battles, World Cup groups — which
+    should inform how aggressive or defensive a team's tactics should be.
+    Common IDs: PL, CL, BL1, SA, PD, FL1, WC (World Cup), EC (Euros).
     """
     data = get_standings(competition_id)
     if "error" in data:
         return f"Error: {data['error']}"
 
-    lines = [
-        f"{data['competition']} — {data['season']}/{int(data['season'])+1} standings",
-        f"{'Pos':3} {'Team':28} {'P':3} {'W':3} {'D':3} {'L':3} {'GF':4} {'GA':4} {'GD':4} {'Pts':4} {'Form'}",
-        "-" * 80,
-    ]
-    for row in data["standings"]:
-        lines.append(
+    header = f"{'Pos':3} {'Team':28} {'P':3} {'W':3} {'D':3} {'L':3} {'GF':4} {'GA':4} {'GD':4} {'Pts':4} {'Form'}"
+    divider = "-" * 80
+
+    def fmt_row(row: dict) -> str:
+        return (
             f"{row['position']:3} {(row['team'] or '?'):28} "
             f"{row['played']:3} {row['won']:3} {row['drawn']:3} {row['lost']:3} "
             f"{row['goals_for']:4} {row['goals_against']:4} {row['goal_difference']:+4} "
             f"{row['points']:4}  {row['form'] or ''}"
         )
+
+    lines = [f"{data['competition']} — {data['season']} standings"]
+    has_groups = any(row.get("group") for row in data["standings"])
+
+    if has_groups:
+        from collections import defaultdict
+        by_group: dict = defaultdict(list)
+        for row in data["standings"]:
+            by_group[row.get("group", "?")].append(row)
+        for group_name, rows in sorted(by_group.items()):
+            lines += ["", group_name, header, divider]
+            lines += [fmt_row(r) for r in rows]
+    else:
+        lines += [header, divider]
+        lines += [fmt_row(r) for r in data["standings"]]
 
     return "\n".join(lines)
 

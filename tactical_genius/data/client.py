@@ -15,6 +15,8 @@ _HEADERS = {"X-Auth-Token": os.getenv("FOOTBALL_DATA_API_KEY", "")}
 _cache: dict[str, tuple[float, Any]] = {}
 _CACHE_TTL = 60  # seconds
 
+_national_teams: dict[str, int] = {}  # lazily populated from WC/EC competition endpoints
+
 # Quick lookup for clubs people actually ask about — avoids flaky API name search.
 # IDs from football-data.org. Add more as needed.
 _KNOWN_TEAMS: dict[str, int] = {
@@ -53,6 +55,42 @@ _KNOWN_TEAMS: dict[str, int] = {
 }
 
 
+def _load_national_teams() -> dict[str, int]:
+    """Lazy-load national team name → ID from WC and EC competition rosters."""
+    global _national_teams
+    if _national_teams:
+        return _national_teams
+    for code in ("WC", "EC"):
+        raw = _get(f"/competitions/{code}/teams", cache_ttl=86400)
+        if "error" in raw:
+            continue
+        for team in raw.get("teams", []):
+            tid = team.get("id")
+            if not tid:
+                continue
+            for field in ("name", "shortName", "tla"):
+                alias = (team.get(field) or "").lower().strip()
+                if alias and len(alias) >= 2:
+                    _national_teams[alias] = tid
+    return _national_teams
+
+
+def _position_to_group(position: str | None) -> str:
+    """Map any club or national team position string to one of four groups."""
+    if not position:
+        return "unknown"
+    pos = position.lower()
+    if "goalkeeper" in pos:
+        return "goalkeepers"
+    if any(x in pos for x in ("-back", "sweeper", "stopper", "defence", "defender")):
+        return "defenders"
+    if "midfield" in pos:
+        return "midfielders"
+    if any(x in pos for x in ("forward", "striker", "winger", "attack", "offence")):
+        return "attackers"
+    return "unknown"
+
+
 def _get(path: str, params: dict | None = None, cache_ttl: int = _CACHE_TTL) -> dict:
     cache_key = path + str(sorted((params or {}).items()))
     if cache_key in _cache:
@@ -88,54 +126,49 @@ def _get(path: str, params: dict | None = None, cache_ttl: int = _CACHE_TTL) -> 
 
 def search_team(name: str, limit: int = 5) -> dict:
     """
-    Search for a team by name. Checks a local lookup table first (fast, reliable),
+    Search for a team by name. Checks clubs and national teams locally first (fast, reliable),
     then falls back to the API for less common clubs.
     """
     query = name.lower().strip()
 
-    # local lookup — handles most clubs people will ask about
-    exact_id = _KNOWN_TEAMS.get(query)
-    if exact_id:
-        raw = _get(f"/teams/{exact_id}", cache_ttl=3600)
-        if "error" not in raw:
-            return {
-                "count": 1,
-                "teams": [{
-                    "id": raw.get("id"),
-                    "name": raw.get("name"),
-                    "short_name": raw.get("shortName"),
-                    "tla": raw.get("tla"),
-                    "area": raw.get("area", {}).get("name"),
-                    "competitions": [c.get("name") for c in raw.get("runningCompetitions", [])],
-                }],
-            }
+    def _team_from_id(tid: int) -> dict | None:
+        r = _get(f"/teams/{tid}", cache_ttl=3600)
+        if "error" in r:
+            return None
+        return {
+            "id": r.get("id"),
+            "name": r.get("name"),
+            "short_name": r.get("shortName"),
+            "tla": r.get("tla"),
+            "area": r.get("area", {}).get("name"),
+            "competitions": [c.get("name") for c in r.get("runningCompetitions", [])],
+        }
 
-    # fuzzy match against the lookup table before hitting the API
-    fuzzy = [
-        (key, tid) for key, tid in _KNOWN_TEAMS.items()
-        if query in key or key in query
-    ]
+    # exact match — clubs first, then national teams
+    exact_id = _KNOWN_TEAMS.get(query) or _load_national_teams().get(query)
+    if exact_id:
+        t = _team_from_id(exact_id)
+        if t:
+            return {"count": 1, "teams": [t]}
+
+    # fuzzy match across clubs + national teams
+    combined = {**_KNOWN_TEAMS, **_load_national_teams()}
+    fuzzy = [(key, tid) for key, tid in combined.items() if query in key or key in query]
     if fuzzy:
-        results = []
-        seen = set()
-        for key, tid in fuzzy[:limit]:
+        results, seen = [], set()
+        for key, tid in fuzzy:
             if tid in seen:
                 continue
             seen.add(tid)
-            r = _get(f"/teams/{tid}", cache_ttl=3600)
-            if "error" not in r:
-                results.append({
-                    "id": r.get("id"),
-                    "name": r.get("name"),
-                    "short_name": r.get("shortName"),
-                    "tla": r.get("tla"),
-                    "area": r.get("area", {}).get("name"),
-                    "competitions": [c.get("name") for c in r.get("runningCompetitions", [])],
-                })
+            t = _team_from_id(tid)
+            if t:
+                results.append(t)
+            if len(results) == limit:
+                break
         if results:
             return {"count": len(results), "teams": results}
 
-    # fall back to API search for unknown clubs
+    # API search for unknown clubs
     raw = _get("/teams", params={"name": name}, cache_ttl=3600)
     if "error" in raw:
         return raw
@@ -259,6 +292,15 @@ def get_team_recent_form(team_id: int, last_n: int = 5) -> dict:
         if len(results) == last_n:
             break
 
+    if not results:
+        return {
+            "error": (
+                f"No finished matches found for team {team_id} via the free API tier. "
+                "International competitions like AFCON and WC qualifying aren't covered — "
+                "only matches played in WC, EC, PL, CL, BL1, SA, PD, or FL1 are available."
+            )
+        }
+
     wins = sum(1 for r in results if r["result"] == "W")
     draws = sum(1 for r in results if r["result"] == "D")
     losses = sum(1 for r in results if r["result"] == "L")
@@ -288,17 +330,17 @@ def get_team_squad(team_id: int) -> dict:
     if "error" in raw:
         return raw
 
-    coach = raw.get("coach", {})
+    coach = raw.get("coach") or {}
     squad = [
         {
             "id": p.get("id"),
             "name": p.get("name"),
             "position": p.get("position"),
             "nationality": p.get("nationality"),
-            "date_of_birth": p.get("dateOfBirth", "")[:10],
+            "date_of_birth": (p.get("dateOfBirth") or "")[:10],
             "shirt_number": p.get("shirtNumber"),
         }
-        for p in raw.get("squad", [])
+        for p in (raw.get("squad") or [])
     ]
 
     return {
@@ -310,10 +352,10 @@ def get_team_squad(team_id: int) -> dict:
         "founded": raw.get("founded"),
         "coach": {"name": coach.get("name"), "nationality": coach.get("nationality")},
         "squad_by_position": {
-            "goalkeepers": [p for p in squad if p["position"] == "Goalkeeper"],
-            "defenders": [p for p in squad if p["position"] == "Defence"],
-            "midfielders": [p for p in squad if p["position"] == "Midfield"],
-            "attackers": [p for p in squad if p["position"] in ("Offence", "Attack", "Forward")],
+            "goalkeepers": [p for p in squad if _position_to_group(p["position"]) == "goalkeepers"],
+            "defenders": [p for p in squad if _position_to_group(p["position"]) == "defenders"],
+            "midfielders": [p for p in squad if _position_to_group(p["position"]) == "midfielders"],
+            "attackers": [p for p in squad if _position_to_group(p["position"]) == "attackers"],
         },
         "squad_count": len(squad),
     }
@@ -404,10 +446,14 @@ def get_standings(competition_id: str | int) -> dict:
     if "error" in raw:
         return raw
 
+    all_tables = raw.get("standings", [])
+    # league format has a TOTAL table; WC/EC use per-group tables — fall back to all groups
+    total_tables = [t for t in all_tables if t.get("type") == "TOTAL"]
+    tables_to_use = total_tables if total_tables else all_tables
+
     entries = []
-    for table in raw.get("standings", []):
-        if table.get("type") != "TOTAL":
-            continue
+    for table in tables_to_use:
+        group = table.get("type") if table.get("type") != "TOTAL" else None
         for row in table.get("table", []):
             entries.append({
                 "position": row.get("position"),
@@ -422,8 +468,10 @@ def get_standings(competition_id: str | int) -> dict:
                 "goal_difference": row.get("goalDifference"),
                 "points": row.get("points"),
                 "form": row.get("form"),
+                "group": group,
             })
-        break  # only need TOTAL, not HOME/AWAY splits
+        if total_tables:
+            break  # for a regular league, one TOTAL table is enough
 
     return {
         "competition": raw.get("competition", {}).get("name"),
